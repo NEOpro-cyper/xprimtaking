@@ -4,7 +4,14 @@
  * Fetches stream URLs from xprime.su finger server with:
  * - 4-core parallel ARGON2ID Altcha solving
  * - 10-minute response caching for instant repeated access
- * - Clean REST API with CORS
+ * - Clean RESTful API with CORS
+ *
+ * Routes:
+ *   GET /movie/:tmdbId              — movie stream
+ *   GET /tv/:tmdbId/:season/:episode — TV episode stream
+ *   GET /cache/status               — cache stats
+ *   DELETE /cache                   — clear cache
+ *   GET /health                     — health check
  */
 
 import express from 'express';
@@ -13,6 +20,7 @@ import { StreamCache } from './cache.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const NUM_WORKERS = parseInt(process.env.WORKERS || '4') || 4;
 const BASE_URL = 'https://mznxiwqjdiq00239q.space';
 const SPOOF_REFERER = 'https://xk4l.mzt4pr8wlkxnv0qsha5g.website';
 
@@ -50,29 +58,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── GET /stream ────────────────────────────────────────────────
+// ─── Core stream handler ────────────────────────────────────────
 
-app.get('/stream', async (req, res) => {
-  const { tmdbId, name, year, imdbId, type = 'movie', season, episode } = req.query;
-
-  if (!tmdbId) {
-    return sendJson(res, {
-      success: false,
-      error: 'Missing required query param: tmdbId',
-      example: '/stream?tmdbId=687163&name=Project+Hail+Mary&year=2026&imdbId=tt2467372',
-    }, 400);
-  }
-
-  const media = {
-    tmdbId: parseInt(tmdbId),
-    name: name || '',
-    year: year ? parseInt(year) : undefined,
-    imdbId: imdbId || '',
-    type,
-    season: season ? parseInt(season) : undefined,
-    episode: episode ? parseInt(episode) : undefined,
-  };
-
+async function handleStream(req, res, media) {
   // Check cache first
   const cacheKey = streamCache.buildKey(media);
   const cached = streamCache.get(cacheKey);
@@ -88,14 +76,14 @@ app.get('/stream', async (req, res) => {
 
   try {
     // Solve Altcha with parallel workers
-    console.log(`[STREAM] Cache miss for "${cacheKey}", solving with ${4} workers...`);
+    console.log(`[STREAM] Cache miss for "${cacheKey}", solving with ${NUM_WORKERS} workers...`);
     const t0 = Date.now();
 
     const { token, solveTime, workers } = await solveAltchaParallel();
     console.log(`[ALTCHA] Solved in ${(solveTime / 1000).toFixed(1)}s (using ${workers} workers)`);
 
     // Fetch stream from finger server
-    console.log(`[FINGER] Fetching stream for TMDB:${media.tmdbId} "${media.name}"...`);
+    console.log(`[FINGER] Fetching stream for ${media.type}:${media.tmdbId}${media.type === 'tv' ? ` S${media.season}E${media.episode}` : ''} "${media.name}"...`);
     const data = await fetchFingerStream(token, media);
     const totalTime = Date.now() - t0;
 
@@ -118,15 +106,80 @@ app.get('/stream', async (req, res) => {
     console.error(`[STREAM] Error: ${err.message}`);
     sendJson(res, { success: false, error: err.message, data: null }, 502);
   }
+}
+
+// ─── GET /movie/:tmdbId ────────────────────────────────────────
+
+app.get('/movie/:tmdbId', async (req, res) => {
+  const tmdbId = parseInt(req.params.tmdbId);
+  if (isNaN(tmdbId) || tmdbId <= 0) {
+    return sendJson(res, {
+      success: false,
+      error: 'Invalid tmdbId — must be a positive number',
+      example: '/movie/687163',
+    }, 400);
+  }
+
+  const { name, year, imdbId } = req.query;
+
+  await handleStream(req, res, {
+    tmdbId,
+    name: name || '',
+    year: year ? parseInt(year) : undefined,
+    imdbId: imdbId || '',
+    type: 'movie',
+  });
 });
 
-// ─── GET /cache/status ──────────────────────────────────────────
+// ─── GET /tv/:tmdbId/:season/:episode ──────────────────────────
+
+app.get('/tv/:tmdbId/:season/:episode', async (req, res) => {
+  const tmdbId = parseInt(req.params.tmdbId);
+  const season = parseInt(req.params.season);
+  const episode = parseInt(req.params.episode);
+
+  if (isNaN(tmdbId) || tmdbId <= 0) {
+    return sendJson(res, {
+      success: false,
+      error: 'Invalid tmdbId — must be a positive number',
+      example: '/tv/84958/1/1',
+    }, 400);
+  }
+  if (isNaN(season) || season < 0) {
+    return sendJson(res, {
+      success: false,
+      error: 'Invalid season — must be a non-negative number',
+      example: '/tv/84958/1/1',
+    }, 400);
+  }
+  if (isNaN(episode) || episode <= 0) {
+    return sendJson(res, {
+      success: false,
+      error: 'Invalid episode — must be a positive number',
+      example: '/tv/84958/1/1',
+    }, 400);
+  }
+
+  const { name, year, imdbId } = req.query;
+
+  await handleStream(req, res, {
+    tmdbId,
+    name: name || '',
+    year: year ? parseInt(year) : undefined,
+    imdbId: imdbId || '',
+    type: 'tv',
+    season,
+    episode,
+  });
+});
+
+// ─── GET /cache/status ─────────────────────────────────────────
 
 app.get('/cache/status', (req, res) => {
   sendJson(res, { stats: streamCache.getStats(), entries: streamCache.getAll() });
 });
 
-// ─── DELETE /cache ──────────────────────────────────────────────
+// ─── DELETE /cache ─────────────────────────────────────────────
 
 app.delete('/cache', (req, res) => {
   streamCache.clear();
@@ -138,13 +191,14 @@ app.delete('/cache/:key', (req, res) => {
   sendJson(res, { success: !!deleted, message: deleted ? `Cache entry "${req.params.key}" cleared` : 'Entry not found' });
 });
 
-// ─── GET /health ────────────────────────────────────────────────
+// ─── GET /health ───────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
   sendJson(res, {
     status: 'ok',
     uptime: process.uptime(),
     cache: streamCache.getStats(),
+    workers: NUM_WORKERS,
     timestamp: new Date().toISOString(),
   });
 });
@@ -191,7 +245,10 @@ app.use((req, res) => {
     success: false,
     error: 'Not found',
     endpoints: {
-      stream: 'GET /stream?tmdbId=687163&name=Project+Hail+Mary&year=2026',
+      movie: 'GET /movie/:tmdbId',
+      movieExample: '/movie/687163?name=Project+Hail+Mary&year=2026',
+      tv: 'GET /tv/:tmdbId/:season/:episode',
+      tvExample: '/tv/84958/1/1?name=Loki',
       cacheStatus: 'GET /cache/status',
       cacheClear: 'DELETE /cache',
       health: 'GET /health',
@@ -211,6 +268,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   server.keepAliveTimeout = 125000;
   server.headersTimeout = 126000;
   console.log(`\n🎬 XPrime Stream API on http://0.0.0.0:${PORT}`);
-  console.log(`⚡ Using ${4} parallel workers for ARGON2ID solving`);
-  console.log(`📦 Cache TTL: 10 minutes\n`);
+  console.log(`⚡ Using ${NUM_WORKERS} parallel workers for ARGON2ID solving`);
+  console.log(`📦 Cache TTL: 10 minutes`);
+  console.log(`🔗 Routes:`);
+  console.log(`   GET /movie/:tmdbId`);
+  console.log(`   GET /tv/:tmdbId/:season/:episode`);
+  console.log(`   GET /cache/status`);
+  console.log(`   DELETE /cache`);
+  console.log(`   GET /health\n`);
 });
