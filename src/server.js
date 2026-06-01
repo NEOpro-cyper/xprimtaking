@@ -116,15 +116,22 @@ app.get('/movie/:tmdbId', async (req, res) => {
     return sendJson(res, {
       success: false,
       error: 'Invalid tmdbId — must be a positive number',
-      example: '/movie/687163',
+      example: '/movie/687163?name=Project+Hail+Mary',
     }, 400);
   }
 
   const { name, year, imdbId } = req.query;
+  if (!name) {
+    return sendJson(res, {
+      success: false,
+      error: 'Missing required query param: name (movie/show name is required by xprime)',
+      example: '/movie/687163?name=Project+Hail+Mary&year=2026',
+    }, 400);
+  }
 
   await handleStream(req, res, {
     tmdbId,
-    name: name || '',
+    name,
     year: year ? parseInt(year) : undefined,
     imdbId: imdbId || '',
     type: 'movie',
@@ -161,10 +168,17 @@ app.get('/tv/:tmdbId/:season/:episode', async (req, res) => {
   }
 
   const { name, year, imdbId } = req.query;
+  if (!name) {
+    return sendJson(res, {
+      success: false,
+      error: 'Missing required query param: name (show name is required by xprime)',
+      example: '/tv/84958/1/1?name=Loki',
+    }, 400);
+  }
 
   await handleStream(req, res, {
     tmdbId,
-    name: name || '',
+    name,
     year: year ? parseInt(year) : undefined,
     imdbId: imdbId || '',
     type: 'tv',
