@@ -226,6 +226,8 @@ async function fetchFingerStream(altchaToken, media) {
   if (media.tmdbId) params.append('id', String(media.tmdbId));
   if (media.imdbId) params.append('imdb', media.imdbId);
   params.append('media_type', media.type || 'movie');
+  if (media.season != null) params.append('season', String(media.season));
+  if (media.episode != null) params.append('episode', String(media.episode));
   params.append('altcha', altchaToken);
 
   const resp = await fetch(`${BASE_URL}/finger?${params.toString()}`, {
