@@ -1,0 +1,21 @@
+{
+  "name": "xprime-stream-api",
+  "version": "2.0.0",
+  "description": "XPrime Stream API — ARGON2ID Altcha solver with 4-core parallel workers + 10-min cache",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop xprime-api",
+    "pm2:logs": "pm2 logs xprime-api"
+  },
+  "dependencies": {
+    "argon2": "^0.41.1",
+    "express": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
